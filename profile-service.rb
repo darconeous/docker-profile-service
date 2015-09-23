@@ -42,7 +42,7 @@ $:.unshift(File.dirname(__FILE__) + "/uuidtools/lib")
 require 'uuidtools'
 
 # explicitly set this to host ip or name if more than one interface exists
-@@address = "AUTOMATIC" 
+@@address = ENV['HOSTNAME']
 
 def local_ip
     # turn off reverse DNS resolution temporarily
@@ -56,14 +56,25 @@ ensure
     Socket.do_not_reverse_lookup = orig
 end
 
+
+@@rsa_key_size = 2048
+
+@@root_cert_file = "ca_cert.pem"
 @@root_cert = nil
+@@root_key_file = "ca_private.pem"
 @@root_key = nil
+
+@@serial_file = "serial"
 @@serial = 100
 
+@@ssl_key_file = "ssl_private.pem"
 @@ssl_key = nil
+@@ssl_cert_file = "ssl_cert.pem"
 @@ssl_cert = nil
 
+@@ra_key_file = "ra_private.pem"
 @@ra_key = nil
+@@ra_cert_file = "ra_cert.pem"
 @@ra_cert = nil
 
 @@issued_first_profile = Set.new
@@ -96,7 +107,7 @@ def issueCert(req, validdays)
         [ ["keyUsage","digitalSignature,keyEncipherment",true] ],
         @@root_cert, @@root_key, OpenSSL::Digest::SHA1.new)
     @@serial += 1
-    File.open("serial", "w") { |f| f.write @@serial.to_s }
+    File.open(@@serial_file, "w") { |f| f.write @@serial.to_s }
     cert
 end
 
@@ -195,7 +206,7 @@ def scep_cert_payload(request, purpose, challenge)
     if (!challenge.empty?)
         payload_content['Challenge'] = challenge
     end
-    payload_content['Keysize'] = 1024
+    payload_content['Keysize'] = @@rsa_key_size
     payload_content['Key Type'] = "RSA"
     payload_content['Key Usage'] = 5 # digital signature (1) | key encipherment (4)
     # NOTE: MS SCEP server will only issue signature or encryption, not both
@@ -339,15 +350,15 @@ def init
     ssl_cert_ok = false
     
     begin
-        @@root_key = OpenSSL::PKey::RSA.new(File.read("ca_private.pem"))
-        @@root_cert = OpenSSL::X509::Certificate.new(File.read("ca_cert.pem"))
-        @@serial = File.read("serial").to_i
+        @@root_key = OpenSSL::PKey::RSA.new(File.read(@@root_key_file))
+        @@root_cert = OpenSSL::X509::Certificate.new(File.read(@@root_cert_file))
+        @@serial = File.read(@@serial_file).to_i
         ca_cert_ok = true
-        @@ra_key = OpenSSL::PKey::RSA.new(File.read("ra_private.pem"))
-        @@ra_cert = OpenSSL::X509::Certificate.new(File.read("ra_cert.pem"))
+        @@ra_key = OpenSSL::PKey::RSA.new(File.read(@@ra_key_file))
+        @@ra_cert = OpenSSL::X509::Certificate.new(File.read(@@ra_cert_file))
         ra_cert_ok = true
-        @@ssl_key = OpenSSL::PKey::RSA.new(File.read("ssl_private.pem"))
-        @@ssl_cert = OpenSSL::X509::Certificate.new(File.read("ssl_cert.pem"))
+        @@ssl_key = OpenSSL::PKey::RSA.new(File.read(@@ssl_key_file))
+        @@ssl_cert = OpenSSL::X509::Certificate.new(File.read(@ssl_cert_file))
         @@ssl_cert.extensions.each { |e,ssl_cert_ok| 
             e.value == "DNS:#{@@address}" && ssl_cert_ok = true
         }
@@ -358,7 +369,7 @@ def init
     rescue
         if !ca_cert_ok
         then
-            @@root_key = OpenSSL::PKey::RSA.new(1024)
+            @@root_key = OpenSSL::PKey::RSA.new(@@rsa_key_size)
             @@root_cert = issue_cert( OpenSSL::X509::Name.parse(
                 "/O=None/CN=ACME Root CA (#{UUIDTools::UUID.random_create().to_s})"),
                 @@root_key, 1, Time.now, Time.now+(86400*365), 
@@ -367,14 +378,14 @@ def init
                 nil, nil, OpenSSL::Digest::SHA1.new)
             @@serial = 100
 
-            File.open("ca_private.pem", "w") { |f| f.write @@root_key.to_pem }
-            File.open("ca_cert.pem", "w") { |f| f.write @@root_cert.to_pem }
-            File.open("serial", "w") { |f| f.write @@serial.to_s }
+            File.open(@@root_key_file, "w") { |f| f.write @@root_key.to_pem }
+            File.open(@@root_cert_file, "w") { |f| f.write @@root_cert.to_pem }
+            File.open(@@serial_file, "w") { |f| f.write @@serial.to_s }
         end
         
         if !ra_cert_ok
         then
-            @@ra_key = OpenSSL::PKey::RSA.new(1024)
+            @@ra_key = OpenSSL::PKey::RSA.new(@@rsa_key_size)
             @@ra_cert = issue_cert( OpenSSL::X509::Name.parse(
                 "/O=None/CN=ACME SCEP RA"),
                 @@ra_key, @@serial, Time.now, Time.now+(86400*365), 
@@ -382,11 +393,11 @@ def init
                 ["keyUsage","Digital Signature,keyEncipherment",true] ],
                 @@root_cert, @@root_key, OpenSSL::Digest::SHA1.new)
             @@serial += 1
-            File.open("ra_private.pem", "w") { |f| f.write @@ra_key.to_pem }
-            File.open("ra_cert.pem", "w") { |f| f.write @@ra_cert.to_pem }
+            File.open(@@ra_key_file, "w") { |f| f.write @@ra_key.to_pem }
+            File.open(@@ra_cert_file, "w") { |f| f.write @@ra_cert.to_pem }
         end
         
-        @@ssl_key = OpenSSL::PKey::RSA.new(1024)
+        @@ssl_key = OpenSSL::PKey::RSA.new(@@rsa_key_size)
         @@ssl_cert = issue_cert( OpenSSL::X509::Name.parse("/O=None/CN=ACME Profile Service"),
             @@ssl_key, @@serial, Time.now, Time.now+(86400*365), 
             [   
@@ -395,9 +406,9 @@ def init
             ],
             @@root_cert, @@root_key, OpenSSL::Digest::SHA1.new)
         @@serial += 1
-        File.open("serial", "w") { |f| f.write @@serial.to_s }
-        File.open("ssl_private.pem", "w") { |f| f.write @@ssl_key.to_pem }
-        File.open("ssl_cert.pem", "w") { |f| f.write @@ssl_cert.to_pem }
+        File.open(@@serial_file, "w") { |f| f.write @@serial.to_s }
+        File.open(@@ssl_key_file, "w") { |f| f.write @@ssl_key.to_pem }
+        File.open(@@ssl_cert_file, "w") { |f| f.write @@ssl_cert.to_pem }
     end
 end
 
@@ -468,7 +479,7 @@ world.mount_proc("/enroll") { |req, res|
 world.mount_proc("/profile") { |req, res|
 
     # verify CMS blob, but don't check signer certificate
-    p7sign = OpenSSL::PKCS7::PKCS7.new(req.body)
+    p7sign = OpenSSL::PKCS7.new(req.body)
     store = OpenSSL::X509::Store.new
     p7sign.verify(nil, store, nil, OpenSSL::PKCS7::NOVERIFY)
     signers = p7sign.signers
@@ -526,6 +537,7 @@ This is a hacked up SCEP service to simplify the profile service demonstration
 but clearly doesn't perform any of the security checks a regular service would
 enforce.
 =end
+include OpenSSL::ASN1
 world.mount_proc("/scep"){ |req, res|
 
   print "Query #{req.query_string}\n"
@@ -533,27 +545,75 @@ world.mount_proc("/scep"){ |req, res|
   
   if query['operation'] == "GetCACert"
     res['Content-Type'] = "application/x-x509-ca-ra-cert"
-    scep_certs = OpenSSL::PKCS7::PKCS7.new()
-    scep_certs.type="signed"
-    scep_certs.certificates=[@@root_cert, @@ra_cert]
+    #scep_certs = OpenSSL::PKCS7.new()
+    #scep_certs.type="signed"
+    #scep_certs.certificates=[@@root_cert, @@ra_cert]
+	scep_certs = Sequence.new([
+	  OpenSSL::ASN1::ObjectId.new('1.2.840.113549.1.7.2'),
+	  ASN1Data.new([
+		Sequence.new([
+		  OpenSSL::ASN1::Integer.new(1),
+		  OpenSSL::ASN1::Set.new([
+		  ]),
+		  Sequence.new([
+			OpenSSL::ASN1::ObjectId.new('1.2.840.113549.1.7.1')
+		  ]),
+		  ASN1Data.new([
+			decode(@@root_cert.to_der),
+			decode(@@ra_cert.to_der)
+		  ], 0, :CONTEXT_SPECIFIC),
+
+
+		  ASN1Data.new([
+		  ], 1, :CONTEXT_SPECIFIC),
+		  OpenSSL::ASN1::Set.new([
+		  ])
+		])
+	  ], 0, :CONTEXT_SPECIFIC)
+	])
     res.body = scep_certs.to_der
+
+
+
   else 
     if query['operation'] == "GetCACaps"
         res['Content-Type'] = "text/plain"
         res.body = "POSTPKIOperation\nSHA-1\nDES3\n"
     else
       if query['operation'] == "PKIOperation"
-        p7sign = OpenSSL::PKCS7::PKCS7.new(req.body)
+        p7sign = OpenSSL::PKCS7.new(req.body)
         store = OpenSSL::X509::Store.new
         p7sign.verify(nil, store, nil, OpenSSL::PKCS7::NOVERIFY)
         signers = p7sign.signers
-        p7enc = OpenSSL::PKCS7::PKCS7.new(p7sign.data)
+        p7enc = OpenSSL::PKCS7.new(p7sign.data)
         csr = p7enc.decrypt(@@ra_key, @@ra_cert)
         cert = issueCert(csr, 1)
-        degenerate_pkcs7 = OpenSSL::PKCS7::PKCS7.new()
-        degenerate_pkcs7.type="signed"
-        degenerate_pkcs7.certificates=[cert]
-        enc_cert = OpenSSL::PKCS7.encrypt(p7sign.certificates, degenerate_pkcs7.to_der, 
+        #degenerate_pkcs7 = OpenSSL::PKCS7.new()
+        #degenerate_pkcs7.type="signed"
+        #degenerate_pkcs7.certificates=[cert]
+		degenerate_pkcs7 = Sequence.new([
+		  OpenSSL::ASN1::ObjectId.new('1.2.840.113549.1.7.2'),
+		  ASN1Data.new([
+			Sequence.new([
+			  OpenSSL::ASN1::Integer.new(1),
+			  OpenSSL::ASN1::Set.new([
+			  ]),
+			  Sequence.new([
+				OpenSSL::ASN1::ObjectId.new('1.2.840.113549.1.7.1')
+			  ]),
+			  ASN1Data.new([
+				decode(cert.to_der)
+			  ], 0, :CONTEXT_SPECIFIC),
+
+
+			  ASN1Data.new([
+			  ], 1, :CONTEXT_SPECIFIC),
+			  OpenSSL::ASN1::Set.new([
+			  ])
+			])
+		  ], 0, :CONTEXT_SPECIFIC)
+		])
+		enc_cert = OpenSSL::PKCS7.encrypt(p7sign.certificates, degenerate_pkcs7.to_der,
             OpenSSL::Cipher::Cipher::new("des-ede3-cbc"), OpenSSL::PKCS7::BINARY)
         reply = OpenSSL::PKCS7.sign(@@ra_cert, @@ra_key, enc_cert.to_der, [], OpenSSL::PKCS7::BINARY)
         res['Content-Type'] = "application/x-pki-message"
